@@ -47,16 +47,13 @@ def clustered_search(request: SearchRequest, cluster_by: str):
     if results.empty:
         raise HTTPException(status_code=404, detail="No results found")
 
-    # Fetch the full dataset (for metadata)
-    full_data = fetch_data()
-
     # Merge the results with the full dataset to access metadata fields
-    results_with_metadata = pd.merge(results, full_data, on="docno", how="left")
+    results_with_metadata = pd.merge(results, data, on="docno", how="left")
 
     if cluster_by not in results_with_metadata.columns:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid cluster_by field: {cluster_by}. Available fields: {list(full_data.columns)}"
+            detail=f"Invalid cluster_by field: {cluster_by}. Available fields: {list(data.columns)}"
         )
 
     # Group by the chosen field
@@ -114,9 +111,6 @@ def cluster_entire_collection(cluster_by: str):
     Returns:
         dict: Clustered results with topics sorted by size.
     """
-
-    # Fetch the entire dataset
-    data = fetch_data()
 
     if cluster_by not in data.columns:
         raise HTTPException(
