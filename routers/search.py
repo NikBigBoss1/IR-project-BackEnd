@@ -1,182 +1,148 @@
-import pandas as pd
+import os
+
 from fastapi import APIRouter, HTTPException, Query
-
+from pydantic import BaseModel
+from typing import List, Optional
 from external_services.mongo_service import fetch_data
-from external_services.pyterrier_service import initialize_pyterrier, search_documents, index_documents
-from models.search_models import SearchRequest
-
-router = APIRouter()
+from external_services.pyterrier_service import (
+    initialize_pyterrier,
+    preprocess_and_cluster,
+    index_documents,
+    search_documents,
+    get_cluster_keywords,
+    save_clusters_to_csv, retrieve_data_by_cluster,
+)
 
 # Initialize PyTerrier when the server starts
 initialize_pyterrier()
-data = index_documents()
+
+data = fetch_data()
+clustered_data = preprocess_and_cluster(data, num_clusters=9, text_col="Location")
+index_documents(clustered_data)
+
+
+# Initialize Router
+router = APIRouter()
+
+
+
+# Pydantic Models
+class SearchRequest(BaseModel):
+    query: str
+    filters: Optional[List[str]] = None
+    cluster_id: Optional[int] = None
+
+
+class ClusterRequest(BaseModel):
+    text_col: str
+    num_clusters: int
+    num_keywords: Optional[int] = 5
+
+
+# @router.get("/fetch-data")
+# def fetch_and_return_data():
+#     """
+#     Fetch data from MongoDB.
+#     """
+#     try:
+#         data = fetch_data()
+#         return {"message": "Data fetched successfully.", "data_count": len(data)}
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/cluster-data")
+def cluster_data(request: ClusterRequest):
+    """
+    Preprocess data and create clusters.
+    """
+    try:
+        data = fetch_data()
+        clustered_data = preprocess_and_cluster(data, num_clusters=request.num_clusters, text_col=request.text_col)
+
+        # Step 2: Sort by cluster ID
+        sorted_data = clustered_data.sort_values(by="cluster").reset_index(drop=True)
+        save_clusters_to_csv(sorted_data, output_file="clustered_data.csv")
+        return {"message": "Clustering completed successfully.", "clusters_saved_to": "clustered_data.csv"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+
+# @router.post("/index-data")
+# def index_data():
+#     """
+#     Index data into PyTerrier after clustering.
+#     """
+#     try:
+#         data = fetch_data()
+#         clustered_data = preprocess_and_cluster(data, num_clusters=5, text_col="text")
+#         index_documents(clustered_data)
+#         return {"message": "Indexing completed successfully."}
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post("/search")
 def search(request: SearchRequest):
-    results = search_documents(request.query, request.filters)
-    if results.empty:
-        raise HTTPException(status_code=404, detail="No results found")
-
-    # Save results to search_results.csv
-    file_path = "search_results.csv"
-    results.to_csv(file_path, index=False)
-    #return results.to_dict(orient="records")
-
-    # Extract of top n results
-    top_n_results = results.head(10)
-    top_n_docnos = top_n_results["docno"].astype(str).tolist()
-    top_n_events = data[data["docno"].isin(top_n_docnos)]
-
-    events_file_path = "first_n_events.csv"
-    top_n_events.to_csv(events_file_path, index=False)
-    print(f"Results saved to {file_path}")
-
-
-@router.post("/clustered-search")
-def clustered_search(request: SearchRequest, cluster_by: str):
     """
-    Perform a search and cluster the results based on a specified field.
+    Perform a search using PyTerrier with optional filters and cluster constraints.
+    """
+    try:
+        results = search_documents(request.query, filters=request.filters, cluster_id=request.cluster_id)
+        if results.empty:
+            raise HTTPException(status_code=404, detail="No results found.")
+        save_clusters_to_csv(results, output_file="data_on_specific_cluster.csv")
+
+        # Extract of top n results
+        top_n_results = results.head(10)
+        top_n_docnos = top_n_results["docno"].astype(str).tolist()
+        top_n_events = data[data["docno"].isin(top_n_docnos)]
+        save_clusters_to_csv(top_n_events, output_file="data_on_specific_cluster_exactly.csv")
+
+        return {"message": "Search completed successfully.", "results": results.to_dict(orient="records")}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/cluster/{cluster_id}")
+def get_data_by_cluster(cluster_id: int):
+    """
+    Retrieve all data from a specific cluster.
+
     Args:
-        request (SearchRequest): The search query and filters.
-        cluster_by (str): The field to cluster by (e.g., 'Location', 'Venue', 'Genre').
+        cluster_id (int): The ID of the cluster to retrieve data for.
+
     Returns:
-        dict: Clustered search results with topics sorted by size.
+        dict: A dictionary containing the documents from the specified cluster.
     """
-    # Perform the search
-    results = search_documents(request.query, request.filters)
-    if results.empty:
-        raise HTTPException(status_code=404, detail="No results found")
+    try:
 
-    # Merge the results with the full dataset to access metadata fields
-    results_with_metadata = pd.merge(results, data, on="docno", how="left")
+        # Retrieve data for the specified cluster
+        data_from_cluster = retrieve_data_by_cluster(cluster_id, clustered_data)
 
-    if cluster_by not in results_with_metadata.columns:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid cluster_by field: {cluster_by}. Available fields: {list(data.columns)}"
-        )
+        if data_from_cluster.empty:
+            raise HTTPException(status_code=404, detail=f"No data found for cluster ID {cluster_id}.")
 
-    # Group by the chosen field
-    grouped = results_with_metadata.groupby(cluster_by)
-
-    # Create clusters
-    clusters = [
-        {
-            "topic": cluster_name,
-            "size": len(group),
-            "results": group.to_dict(orient="records"),
+        save_clusters_to_csv(data_from_cluster, output_file="specific_cluster_data.csv")
+        return {
+            "message": "Data retrieved successfully.",
+            "cluster_id": cluster_id,
+            "data": data_from_cluster.to_dict(orient="records"),
         }
-        for cluster_name, group in grouped
-    ]
-
-    # Sort clusters by size in descending order
-    clustered_results = sorted(clusters, key=lambda x: x["size"], reverse=True)
-
-    # Save to CSV
-    save_clusters_to_csv(clustered_results)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 
-def save_clusters_to_csv(clustered_results, output_file="clustered_results.csv"):
-    # Flatten the clustered results into rows
-    rows = []
-    for cluster in clustered_results:
-        topic = cluster["topic"]
-        size = cluster["size"]
-        for result in cluster["results"]:
-            result_with_cluster = result.copy()
-            result_with_cluster["topic"] = topic
-            result_with_cluster["cluster_size"] = size
-            rows.append(result_with_cluster)
-
-    # Convert to a DataFrame and save to CSV
-    df = pd.DataFrame(rows)
-    df.to_csv(output_file, index=False)
-    print(f"Clustered results saved to {output_file}")
-
-
-
-
-
-
-
-
-
-@router.post("/cluster-collection")
-def cluster_entire_collection(cluster_by: str):
+@router.post("/cluster-keywords")
+def extract_cluster_keywords(request: ClusterRequest):
     """
-    Cluster the entire collection of items based on a specified field.
-    Args:
-        cluster_by (str): The field to cluster by (e.g., 'Location', 'Venue', 'Genre').
-    Returns:
-        dict: Clustered results with topics sorted by size.
+    Extract keywords for clusters from the dataset.
     """
-
-    if cluster_by not in data.columns:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid cluster_by field: {cluster_by}. Available fields: {list(data.columns)}"
-        )
-
-    # Group by the chosen field
-    grouped = data.groupby(cluster_by)
-
-    # Create clusters
-    clusters = [
-        {
-               "topic": cluster_name,
-               "size": len(group),
-               "results": group.to_dict(orient="records"),
-        }
-        for cluster_name, group in grouped
-      ]
-
-    # Sort clusters by size in descending order
-    sorted_clusters = sorted(clusters, key=lambda x: x["size"], reverse=True)
-
-    # Save clusters to a CSV file
-    output_file = "clustered_collection.csv"
-    save_clusters_to_csv(sorted_clusters, output_file)
-
-
-
-# @router.post("/cluster-collection")
-# def cluster_entire_collection_endpoint(cluster_by: str, use_fuzzy: bool = False, use_tfidf: bool = False, n_clusters: int = 12, threshold: int = 80):
-#     """
-#     API endpoint to cluster the entire collection based on a specified field.
-#     Args:
-#         cluster_by (str): The field to cluster by (e.g., 'Location').
-#         use_fuzzy (bool): Use fuzzy matching for clustering.
-#         use_tfidf (bool): Use TF-IDF + KMeans for clustering.
-#         n_clusters (int): Number of clusters (TF-IDF).
-#         threshold (int): Similarity threshold for fuzzy matching.
-#     Returns:
-#         dict: Clustered results.
-#     """
-#     try:
-#         # Fetch the entire dataset
-#         data = fetch_data()
-#
-#         # Perform clustering
-#         clustered_data = cluster_entire_collection(
-#             data,
-#             cluster_by=cluster_by,
-#             use_fuzzy=use_fuzzy,
-#             use_tfidf=use_tfidf,
-#             n_clusters=n_clusters,
-#             threshold=threshold
-#         )
-#
-#         # Save to CSV
-#         output_file = "clustered_collection.csv"
-#         clustered_data.to_csv(output_file, index=False)
-#         # return {
-#         #     "message": f"Clustered collection saved to {output_file}",
-#         #     "clusters": clustered_data.groupby("Cluster").size().to_dict()
-#         # }
-#
-#     except ValueError as e:
-#         raise HTTPException(status_code=400, detail=str(e))
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
-#
+    try:
+        keywords = get_cluster_keywords(data, text_col=request.text_col, num_clusters=request.num_clusters, num_keywords=request.num_keywords)
+        return {"message": "Keywords extracted successfully.", "keywords": keywords}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
