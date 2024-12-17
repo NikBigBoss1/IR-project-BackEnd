@@ -1,9 +1,11 @@
 from pymongo import MongoClient
 import pandas as pd
 import os
-from decouple import config
+from dotenv import load_dotenv
 
-MONGO_URI = config('MONGO_URI')
+load_dotenv()  # Load environment variables from a .env file
+
+MONGO_URI = os.getenv("MONGO_URI")
 DB_NAME = "events_db"
 COLLECTION_NAME = "eventsTest"
 

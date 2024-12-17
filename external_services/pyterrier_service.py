@@ -56,8 +56,14 @@ def index_documents(data: pd.DataFrame):
     if not os.path.exists(INDEX_DIR):
         os.makedirs(INDEX_DIR, exist_ok=True)
 
+        # Convert 'cluster' to string, as PyTerrier expects metadata as strings
+        data["cluster"] = data["cluster"].astype(str)
+
         # Index documents with PyTerrier
-        indexer = pt.IterDictIndexer(INDEX_DIR)
+        indexer = pt.IterDictIndexer(
+            INDEX_DIR,
+            meta=["docno", "cluster", "Event Name", "Date", "Venue", "Location", "Price", "Description"]
+        )
         documents = data[["docno", "text", "cluster", "Event Name", "Date", "Venue", "Location", "Price", "Description", "Image Link", "Link"]].to_dict(orient="records")
         indexer.index(documents)
         print("Indexing completed successfully!")
@@ -65,7 +71,7 @@ def index_documents(data: pd.DataFrame):
         print("Indexing already completed.")
 
 
-def search_documents(query: str, filters=None, cluster_id=None) -> pd.DataFrame:
+def search_documents(query: str = "", filters=None, cluster_id=None) -> pd.DataFrame:
     """
     Search for documents using BM25 and apply optional filters or cluster constraints.
 
@@ -77,6 +83,28 @@ def search_documents(query: str, filters=None, cluster_id=None) -> pd.DataFrame:
     Returns:
         pd.DataFrame: Search results.
     """
+    if not pt.started():
+        pt.init()
+
+    if not query.strip():  # If the query is empty
+        print("No query provided, fetching entire dataset")
+
+        index = pt.IndexFactory.of(INDEX_DIR)
+        meta_index = index.getMetaIndex()
+        doc_ids = range(index.getCollectionStatistics().getNumberOfDocuments())
+
+        docnos = [meta_index.getItem("docno", doc_id) for doc_id in doc_ids]
+        clusters = [meta_index.getItem("cluster", doc_id) for doc_id in doc_ids]
+
+        data = pd.DataFrame({"docno": docnos, "cluster": clusters})
+
+        # If cluster_id is provided, filter by cluster_id
+        if cluster_id is not None:
+            print(f"Filtering by cluster_id: {cluster_id}")
+            data = data[data["cluster"] == str(cluster_id)]
+
+        return data
+
     bm25 = pt.BatchRetrieve(INDEX_DIR, wmodel="BM25")
 
     # Add filters to the query
@@ -85,45 +113,24 @@ def search_documents(query: str, filters=None, cluster_id=None) -> pd.DataFrame:
 
     results = bm25.search(query)
 
-    # Filter results by cluster ID if provided
-    if cluster_id is not None and "cluster" in results.columns:
-        results = results[results["cluster"] == cluster_id]
+    # Filter results by cluster_id if provided
+    if cluster_id is not None:
+        print(f"Filtering search results by cluster_id: {cluster_id}")
+
+        index = pt.IndexFactory.of(INDEX_DIR)
+        meta_index = index.getMetaIndex()
+        doc_ids = range(index.getCollectionStatistics().getNumberOfDocuments())
+
+        docnos = [meta_index.getItem("docno", doc_id) for doc_id in doc_ids]
+        clusters = [meta_index.getItem("cluster", doc_id) for doc_id in doc_ids]
+        metadata = pd.DataFrame({"docno": docnos, "cluster": clusters})
+
+        results = pd.merge(results, metadata, on="docno", how="left")
+
+        results = results[results["cluster"] == str(cluster_id)]
 
     return results
 
-# def search_documents(query: str, filters=None, cluster_id=None) -> pd.DataFrame:
-#     """
-#     Search for documents using BM25 and apply optional filters or cluster constraints.
-#
-#     Args:
-#         query (str): The search query.
-#         filters (list): Optional filters to apply to the query.
-#         cluster_id (int): Cluster ID to restrict results to.
-#
-#     Returns:
-#         pd.DataFrame: Search results.
-#     """
-#     bm25 = pt.BatchRetrieve(INDEX_DIR, wmodel="BM25")
-#
-#     # Add filters to the query if provided
-#     if filters:
-#         query += " " + " AND ".join(filters)
-#
-#     # Perform the BM25 search
-#     results = bm25.search(query)
-#
-#     # Fetch metadata (including 'cluster') from the indexed data
-#     data = fetch_data()  # Fetch the full dataset with cluster information
-#     metadata = data[["docno", "cluster"]]  # Extract only 'docno' and 'cluster'
-#
-#     # Merge search results with metadata to include cluster information
-#     results_with_metadata = pd.merge(results, metadata, on="docno", how="left")
-#
-#     # Filter results by cluster ID if provided
-#     if cluster_id is not None:
-#         results_with_metadata = results_with_metadata[results_with_metadata["cluster"] == cluster_id]
-#
-#     return results_with_metadata
 
 
 def retrieve_data_by_cluster(cluster_id: int, data: pd.DataFrame) -> pd.DataFrame:
