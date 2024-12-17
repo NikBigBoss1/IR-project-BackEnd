@@ -62,9 +62,9 @@ def index_documents(data: pd.DataFrame):
         # Index documents with PyTerrier
         indexer = pt.IterDictIndexer(
             INDEX_DIR,
-            meta=["docno", "cluster", "Event Name", "Date", "Venue", "Location", "Price", "Description"]
+            meta=["docno", "cluster", "Event Name", "Date", "Venue", "Location", "LocationShort", "Price", "Description"]
         )
-        documents = data[["docno", "text", "cluster", "Event Name", "Date", "Venue", "Location", "Price", "Description", "Image Link", "Link"]].to_dict(orient="records")
+        documents = data[["docno", "text", "cluster", "Event Name", "Date", "Venue", "Location", "LocationShort", "Price", "Description", "Image Link", "Link"]].to_dict(orient="records")
         indexer.index(documents)
         print("Indexing completed successfully!")
     else:

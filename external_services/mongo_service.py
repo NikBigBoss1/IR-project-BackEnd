@@ -31,4 +31,25 @@ def fetch_data():
             data['Venue'] + " " +
             data['Location']
     )
+
+    # -----------------Add short text field LocationShort
+    cities_df = pd.read_csv("gb.csv")
+    valid_cities = set(cities_df["city"].dropna().astype(str))
+    valid_admin_names = set(cities_df["admin_name"].dropna().astype(str))
+
+    valid_locations = valid_cities.union(valid_admin_names)
+
+    # Step 3: Extract city/admin names from Location
+    def extract_valid_cities(location):
+        """Extract valid city or admin names from the Location field."""
+        if pd.isna(location):
+            return ""
+        location_str = str(location)  # Ensure Location is a string and lowercase
+        matched_cities = [city for city in valid_locations if city in location_str]
+        return ", ".join(matched_cities) if matched_cities else ""
+
+    data["LocationShort"] = data["Location"].apply(extract_valid_cities)
+
+
+
     return data
