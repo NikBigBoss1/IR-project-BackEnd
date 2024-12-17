@@ -86,17 +86,38 @@ def search_documents(query: str = "", filters=None, cluster_id=None) -> pd.DataF
     if not pt.started():
         pt.init()
 
-    if not query.strip():  # If the query is empty
-        print("No query provided, fetching entire dataset")
-
-        index = pt.IndexFactory.of(INDEX_DIR)
+    def fetch_metadata(index_dir: str) -> pd.DataFrame:
+        """Fetch metadata (docno and cluster) from the index."""
+        index = pt.IndexFactory.of(index_dir)
         meta_index = index.getMetaIndex()
         doc_ids = range(index.getCollectionStatistics().getNumberOfDocuments())
 
         docnos = [meta_index.getItem("docno", doc_id) for doc_id in doc_ids]
         clusters = [meta_index.getItem("cluster", doc_id) for doc_id in doc_ids]
+        return pd.DataFrame({"docno": docnos, "cluster": clusters})
 
-        data = pd.DataFrame({"docno": docnos, "cluster": clusters})
+
+    if not query.strip():  # If the query is empty
+        print("No query provided, fetching entire dataset")
+
+        data = fetch_metadata(INDEX_DIR)
+
+        if filters:
+            query = " " + " AND ".join(filters)
+            print(f"Composed query: {query}")
+
+            bm25 = pt.BatchRetrieve(INDEX_DIR, wmodel="BM25")
+            results = bm25.search(query)
+
+            # Filter results by cluster_id if provided
+            if cluster_id is not None:
+                print(f"Filtering search results by cluster_id: {cluster_id}")
+
+                metadata = fetch_metadata(INDEX_DIR)
+                results = pd.merge(results, metadata, on="docno", how="left")
+                results = results[results["cluster"] == str(cluster_id)]
+
+            return results
 
         # If cluster_id is provided, filter by cluster_id
         if cluster_id is not None:
@@ -105,31 +126,24 @@ def search_documents(query: str = "", filters=None, cluster_id=None) -> pd.DataF
 
         return data
 
-    bm25 = pt.BatchRetrieve(INDEX_DIR, wmodel="BM25")
+    else:
+        bm25 = pt.BatchRetrieve(INDEX_DIR, wmodel="BM25")
 
-    # Add filters to the query
-    if filters:
-        query += " " + " AND ".join(filters)
+        # Add filters to the query
+        if filters:
+            query += " " + " AND ".join(filters)
 
-    results = bm25.search(query)
+        results = bm25.search(query)
 
-    # Filter results by cluster_id if provided
-    if cluster_id is not None:
-        print(f"Filtering search results by cluster_id: {cluster_id}")
+        # Filter results by cluster_id if provided
+        if cluster_id is not None:
+            print(f"Filtering search results by cluster_id: {cluster_id}")
 
-        index = pt.IndexFactory.of(INDEX_DIR)
-        meta_index = index.getMetaIndex()
-        doc_ids = range(index.getCollectionStatistics().getNumberOfDocuments())
+            metadata = fetch_metadata(INDEX_DIR)
+            results = pd.merge(results, metadata, on="docno", how="left")
+            results = results[results["cluster"] == str(cluster_id)]
 
-        docnos = [meta_index.getItem("docno", doc_id) for doc_id in doc_ids]
-        clusters = [meta_index.getItem("cluster", doc_id) for doc_id in doc_ids]
-        metadata = pd.DataFrame({"docno": docnos, "cluster": clusters})
-
-        results = pd.merge(results, metadata, on="docno", how="left")
-
-        results = results[results["cluster"] == str(cluster_id)]
-
-    return results
+        return results
 
 
 
