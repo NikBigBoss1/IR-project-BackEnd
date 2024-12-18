@@ -4,7 +4,6 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.cluster import KMeans
 import pyterrier as pt
 
-from external_services.mongo_service import fetch_data
 from settings import INDEX_DIR
 
 def initialize_pyterrier():
@@ -59,12 +58,31 @@ def index_documents(data: pd.DataFrame):
         # Convert 'cluster' to string, as PyTerrier expects metadata as strings
         data["cluster"] = data["cluster"].astype(str)
 
+        # Vectorize the --------- LocationShort Cluster ------------ using TF-IDF
+        vectorizer = TfidfVectorizer(stop_words="english", max_features=1000)
+        tfidf_matrix = vectorizer.fit_transform(data["LocationShort"])
+
+        # Apply K-Means clustering
+        kmeans = KMeans(n_clusters=15, random_state=42)
+        data["LocationShort Cluster"] = kmeans.fit_predict(tfidf_matrix)
+        data["LocationShort Cluster"] = data["LocationShort Cluster"].astype(str)
+
+
+        # Vectorize the --------- Price Cluster ------------ using TF-IDF
+        vectorizer = TfidfVectorizer(stop_words="english", max_features=1000)
+        tfidf_matrix = vectorizer.fit_transform(data["Price"])
+
+        # Apply K-Means clustering
+        kmeans = KMeans(n_clusters=6, random_state=42)
+        data["Price Cluster"] = kmeans.fit_predict(tfidf_matrix)
+        data["Price Cluster"] = data["Price Cluster"].astype(str)
+
         # Index documents with PyTerrier
         indexer = pt.IterDictIndexer(
             INDEX_DIR,
-            meta=["docno", "cluster", "Event Name", "Date", "Venue", "Location", "LocationShort", "Price", "Description"]
+            meta=["docno", "cluster", "Event Name", "Date", "Venue", "Location", "LocationShort", "Price", "Description", "text", "Image Link", "Link", "LocationShort Cluster", "Price Cluster"]
         )
-        documents = data[["docno", "text", "cluster", "Event Name", "Date", "Venue", "Location", "LocationShort", "Price", "Description", "Image Link", "Link"]].to_dict(orient="records")
+        documents = data[["docno", "text", "cluster", "Event Name", "Date", "Venue", "Location", "LocationShort", "Price", "Description", "Image Link", "Link", "LocationShort Cluster", "Price Cluster"]].to_dict(orient="records")
         indexer.index(documents)
         print("Indexing completed successfully!")
     else:
@@ -94,7 +112,15 @@ def search_documents(query: str = "", filters=None, cluster_id=None) -> pd.DataF
 
         docnos = [meta_index.getItem("docno", doc_id) for doc_id in doc_ids]
         clusters = [meta_index.getItem("cluster", doc_id) for doc_id in doc_ids]
-        return pd.DataFrame({"docno": docnos, "cluster": clusters})
+        eventName = [meta_index.getItem("Event Name", doc_id) for doc_id in doc_ids]
+        date = [meta_index.getItem("Date", doc_id) for doc_id in doc_ids]
+        venue = [meta_index.getItem("Venue", doc_id) for doc_id in doc_ids]
+        location = [meta_index.getItem("Location", doc_id) for doc_id in doc_ids]
+        price = [meta_index.getItem("Price", doc_id) for doc_id in doc_ids]
+        description = [meta_index.getItem("Description", doc_id) for doc_id in doc_ids]
+        imageLink = [meta_index.getItem("Image Link", doc_id) for doc_id in doc_ids]
+        link = [meta_index.getItem("Link", doc_id) for doc_id in doc_ids]
+        return pd.DataFrame({"docno": docnos, "cluster": clusters, "Event Name": eventName, "Date": date, "Venue": venue, "Location": location, "Price": price, "Description": description, "Image Link": imageLink, "Link": link})
 
 
     if not query.strip():  # If the query is empty
@@ -147,23 +173,44 @@ def search_documents(query: str = "", filters=None, cluster_id=None) -> pd.DataF
 
 
 
-def retrieve_data_by_cluster(cluster_id: int, data: pd.DataFrame) -> pd.DataFrame:
+def retrieve_data_by_cluster(cluster_id: int, cluster_type: str, index_dir: str) -> pd.DataFrame:
     """
     Retrieve all documents from a specific cluster.
 
     Args:
         cluster_id (int): The ID of the cluster to retrieve data for.
-        data (pd.DataFrame): The dataset containing the 'cluster' column.
+        cluster_type (str): The type of cluster column to filter by.
+        index_dir (str): The path to the index directory.
 
     Returns:
         pd.DataFrame: DataFrame containing all documents from the specified cluster.
     """
-    # Ensure the 'cluster' column exists
-    if "cluster" not in data.columns:
-        raise ValueError("Cluster information ('cluster' column) is missing. Ensure clustering is applied first.")
+    # Load the index and fetch metadata
+    index = pt.IndexFactory.of(index_dir)
+    meta_index = index.getMetaIndex()
+    doc_ids = range(index.getCollectionStatistics().getNumberOfDocuments())
+
+    # Retrieve metadata fields
+    docnos = [meta_index.getItem("docno", doc_id) for doc_id in doc_ids]
+    clusters = [meta_index.getItem(cluster_type, doc_id) for doc_id in doc_ids]
+    eventName = [meta_index.getItem("Event Name", doc_id) for doc_id in doc_ids]
+    date = [meta_index.getItem("Date", doc_id) for doc_id in doc_ids]
+    venue = [meta_index.getItem("Venue", doc_id) for doc_id in doc_ids]
+    location = [meta_index.getItem("Location", doc_id) for doc_id in doc_ids]
+    price = [meta_index.getItem("Price", doc_id) for doc_id in doc_ids]
+    description = [meta_index.getItem("Description", doc_id) for doc_id in doc_ids]
+    imageLink = [meta_index.getItem("Image Link", doc_id) for doc_id in doc_ids]
+    link = [meta_index.getItem("Link", doc_id) for doc_id in doc_ids]
+
+    # Construct a DataFrame
+    data = pd.DataFrame({"docno": docnos, cluster_type: clusters, "Event Name": eventName, "Date": date, "Venue": venue, "Location": location, "Price": price, "Description": description, "Image Link": imageLink, "Link": link})
+
+    # Ensure the cluster_type column exists
+    if cluster_type not in data.columns:
+        raise ValueError(f"Cluster information ('{cluster_type}' column) is missing in the index.")
 
     # Filter by the specified cluster ID
-    cluster_data = data[data["cluster"] == cluster_id]
+    cluster_data = data[data[cluster_type] == str(cluster_id)]  # Ensure cluster_id matches as a string
 
     return cluster_data
 
