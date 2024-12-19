@@ -267,3 +267,48 @@ def get_venues():
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred while fetching locations: {str(e)}")
+
+
+@router.get("/event/{docno}")
+def get_event_by_docno(docno: str):
+    """
+    Retrieve an event from the indexed data based on the given docno.
+
+    Args:
+        docno (str): The unique document number.
+
+    Returns:
+        dict: The event data corresponding to the given docno.
+    """
+    try:
+        # Load the indexed data
+        index = pt.IndexFactory.of(INDEX_DIR)
+        meta_index = index.getMetaIndex()
+        doc_ids = range(index.getCollectionStatistics().getNumberOfDocuments())
+
+        # Retrieve metadata for all documents
+        docnos = [meta_index.getItem("docno", doc_id) for doc_id in doc_ids]
+
+        # Check if the provided docno exists
+        if docno not in docnos:
+            raise HTTPException(status_code=404, detail=f"Document with docno '{docno}' not found.")
+
+        # Retrieve the corresponding document metadata
+        index_doc_id = docnos.index(docno)
+        event = {
+            "docno": docno,
+            "text": meta_index.getItem("text", index_doc_id),
+            "cluster": meta_index.getItem("cluster", index_doc_id),
+            "Event Name": meta_index.getItem("Event Name", index_doc_id),
+            "Date": meta_index.getItem("Date", index_doc_id),
+            "Venue": meta_index.getItem("Venue", index_doc_id),
+            "Location": meta_index.getItem("Location", index_doc_id),
+            "Price": meta_index.getItem("Price", index_doc_id),
+            "Description": meta_index.getItem("Description", index_doc_id),
+            "Image Link": meta_index.getItem("Image Link", index_doc_id),
+            "Link": meta_index.getItem("Link", index_doc_id),
+        }
+
+        return {"message": "Event retrieved successfully.", "event": event}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error retrieving event: {str(e)}")

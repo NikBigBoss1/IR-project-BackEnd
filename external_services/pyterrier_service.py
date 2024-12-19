@@ -218,7 +218,7 @@ def retrieve_data_by_cluster(cluster_id: int, cluster_type: str, index_dir: str)
 
 def get_cluster_keywords(data: pd.DataFrame, text_col: str = "text", num_clusters: int = 5, num_keywords: int = 5) -> dict:
     """
-    Create clusters and extract keywords for each cluster.
+    Create clusters and extract keywords for each cluster, applying Zipf's law and excluding the most frequent words.
 
     Args:
         data (pd.DataFrame): Dataset containing the text data.
@@ -237,12 +237,26 @@ def get_cluster_keywords(data: pd.DataFrame, text_col: str = "text", num_cluster
     tfidf_matrix = vectorizer.fit_transform(data[text_col])
     feature_names = vectorizer.get_feature_names_out()
 
+    # Determine the most frequent words across all clusters
+    global_word_counts = tfidf_matrix.sum(axis=0).A1
+    most_frequent_words = set(feature_names[i] for i in global_word_counts.argsort()[-10:])  # Top 10 frequent words
+
     # Extract keywords for each cluster
     cluster_keywords = {}
     for cluster_id in range(num_clusters):
         cluster_data = tfidf_matrix[data["cluster"] == cluster_id]
         word_counts = cluster_data.sum(axis=0).A1
-        keywords = [feature_names[i] for i in word_counts.argsort()[-num_keywords:][::-1]]
+
+        # Apply Zipf's law: normalize by rank
+        word_indices = word_counts.argsort()[::-1]  # Sort indices by descending frequency
+        ranked_words = [(feature_names[i], word_counts[i] / (rank + 1)) for rank, i in enumerate(word_indices)]
+        ranked_words = sorted(ranked_words, key=lambda x: x[1], reverse=True)
+
+        # Exclude most frequent words
+        filtered_words = [(word, score) for word, score in ranked_words if word not in most_frequent_words]
+
+        # Select top keywords
+        keywords = [word for word, score in filtered_words[:num_keywords]]
         cluster_keywords[cluster_id] = keywords
 
     return cluster_keywords
