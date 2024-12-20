@@ -3,7 +3,7 @@ import pandas as pd
 import os
 from dotenv import load_dotenv
 
-load_dotenv()  # Load environment variables from a .env file
+load_dotenv()
 
 MONGO_URI = os.getenv("MONGO_URI")
 DB_NAME = "events_db"
@@ -13,9 +13,9 @@ def fetch_data():
     client = MongoClient(MONGO_URI)
     db = client[DB_NAME]
     collection = db[COLLECTION_NAME]
-    # Retrieve data from the MongoDB collection
-    data = pd.DataFrame(list(collection.find({}, {"_id": 0})))  # Exclude _id field
-    data = data.fillna("")  # Replace null values with empty strings
+
+    data = pd.DataFrame(list(collection.find({}, {"_id": 0})))
+    data = data.fillna("")
 
     # Add a unique document number
     data['docno'] = [str(i) for i in range(len(data))]
@@ -39,17 +39,14 @@ def fetch_data():
 
     valid_locations = valid_cities.union(valid_admin_names)
 
-    # Step 3: Extract city/admin names from Location
     def extract_valid_cities(location):
-        """Extract valid city or admin names from the Location field."""
         if pd.isna(location):
             return ""
-        location_str = str(location)  # Ensure Location is a string and lowercase
+        location_str = str(location)
         matched_cities = [city for city in valid_locations if city in location_str]
         return ", ".join(matched_cities) if matched_cities else ""
 
     data["LocationShort"] = data["Location"].apply(extract_valid_cities)
-
 
 
     return data

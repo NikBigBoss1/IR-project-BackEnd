@@ -1,9 +1,6 @@
-import os
-
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
-from typing import List, Optional
+
 import pyterrier as pt
 from external_services.mongo_service import fetch_data
 from external_services.pyterrier_service import (
@@ -14,6 +11,7 @@ from external_services.pyterrier_service import (
     get_cluster_keywords,
     save_clusters_to_csv, retrieve_data_by_cluster,
 )
+from models.search_models import ClusterRequest, SearchRequest
 from settings import INDEX_DIR
 
 # Initialize PyTerrier when the server starts
@@ -28,31 +26,6 @@ index_documents(clustered_data)
 router = APIRouter()
 
 
-
-# Pydantic Models
-class SearchRequest(BaseModel):
-    query: str
-    filters: Optional[List[str]] = None
-    cluster_id: Optional[int] = None
-
-class ClusterRequest(BaseModel):
-    text_col: str
-    num_clusters: int
-    num_keywords: Optional[int] = 5
-
-
-# @router.get("/fetch-data")
-# def fetch_and_return_data():
-#     """
-#     Fetch data from MongoDB.
-#     """
-#     try:
-#         data = fetch_data()
-#         return {"message": "Data fetched successfully.", "data_count": len(data)}
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.post("/cluster-data")
 def cluster_data(request: ClusterRequest):
     """
@@ -62,28 +35,11 @@ def cluster_data(request: ClusterRequest):
         data = fetch_data()
         clustered_data = preprocess_and_cluster(data, num_clusters=request.num_clusters, text_col=request.text_col)
 
-        # Step 2: Sort by cluster ID
         sorted_data = clustered_data.sort_values(by="cluster").reset_index(drop=True)
         save_clusters_to_csv(sorted_data, output_file="clustered_data.csv")
         return {"message": "Clustering completed successfully.", "clusters_saved_to": "clustered_data.csv"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-
-
-# @router.post("/index-data")
-# def index_data():
-#     """
-#     Index data into PyTerrier after clustering.
-#     """
-#     try:
-#         data = fetch_data()
-#         clustered_data = preprocess_and_cluster(data, num_clusters=5, text_col="text")
-#         index_documents(clustered_data)
-#         return {"message": "Indexing completed successfully."}
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/search")
@@ -94,34 +50,23 @@ def search(request: SearchRequest):
     try:
         results = search_documents(request.query, filters=request.filters, cluster_id=request.cluster_id)
 
-        # Extract metadata to map docno to full event details
         index = pt.IndexFactory.of(INDEX_DIR)
         meta_index = index.getMetaIndex()
         doc_ids = range(index.getCollectionStatistics().getNumberOfDocuments())
 
-        # Retrieve all metadata fields (update this list as needed)
+        # Retrieve all metadata fields
         metadata_fields = [
             "docno", "Event Name", "Date", "Venue", "Location",
             "Price", "Description", "Image Link", "Link", "cluster"
         ]
 
-        # Build a metadata dictionary from the index
         metadata = {field: [meta_index.getItem(field, doc_id) for doc_id in doc_ids] for field in metadata_fields}
         metadata_df = pd.DataFrame(metadata)
 
-        # Map results to full event information using docno
         full_results = pd.merge(results, metadata_df, on="docno", how="left")
-
 
         if results.empty:
             raise HTTPException(status_code=404, detail="No results found.")
-        save_clusters_to_csv(results, output_file="data_on_specific_cluster.csv")
-
-        # Extract of top n results
-        top_n_results = results.head(100)
-        top_n_docnos = top_n_results["docno"].astype(str).tolist()
-        top_n_events = data[data["docno"].isin(top_n_docnos)]
-        save_clusters_to_csv(top_n_events, output_file="data_on_specific_cluster_exactly.csv")
 
         return {"message": "Search completed successfully.", "results": full_results.to_dict(orient="records")}
     except Exception as e:
@@ -147,7 +92,6 @@ def get_data_by_cluster(cluster_id: int, cluster_type: str):
         if data_from_cluster.empty:
             raise HTTPException(status_code=404, detail=f"No data found for cluster ID {cluster_id}.")
 
-        save_clusters_to_csv(data_from_cluster, output_file="specific_cluster_data.csv")
         return {
             "message": "Data retrieved successfully.",
             "cluster_id": cluster_id,
@@ -175,12 +119,12 @@ def extract_cluster_keywords(request: ClusterRequest):
 def export_indexed_data():
     """
     Export all indexed data to a CSV file.
+    Test router to see what data we have, as indexed data
 
     Returns:
         dict: Success message with the output file path.
     """
     try:
-        # Load the index
         index = pt.IndexFactory.of(INDEX_DIR)
         meta_index = index.getMetaIndex()
         doc_ids = range(index.getCollectionStatistics().getNumberOfDocuments())
@@ -191,23 +135,19 @@ def export_indexed_data():
             "Price", "Description", "Image Link", "Link", "docno", "cluster", "text", "LocationShort", "LocationShort Cluster", "Price Cluster"
         ]
 
-        # Retrieve metadata for all fields
         metadata = {}
         for field in metadata_fields:
             try:
                 metadata[field] = [meta_index.getItem(field, doc_id) for doc_id in doc_ids]
             except Exception as e:
                 print(f"Warning: Unable to retrieve field '{field}': {e}")
-                metadata[field] = [None] * len(doc_ids)  # Fill with None if field is missing
+                metadata[field] = [None] * len(doc_ids)
 
-        # Create a DataFrame from the retrieved metadata
         indexed_data = pd.DataFrame(metadata)
-
-        sorted_data = indexed_data.sort_values(by="Price Cluster").reset_index(drop=True)
 
         # Save the DataFrame to a CSV file
         output_file = "indexedData.csv"
-        sorted_data.to_csv(output_file, index=False)
+        indexed_data.to_csv(output_file, index=False)
         print(f"Indexed data exported to {output_file}")
 
         return {"message": "Indexed data exported successfully.", "output_file": output_file}
@@ -225,15 +165,12 @@ def get_locations():
         dict: A list of unique locations.
     """
     try:
-        # Load the index
         index = pt.IndexFactory.of(INDEX_DIR)
         meta_index = index.getMetaIndex()
         doc_ids = range(index.getCollectionStatistics().getNumberOfDocuments())
 
-        # Retrieve the LocationShort field from metadata
         location_short = [meta_index.getItem("LocationShort", doc_id) for doc_id in doc_ids]
 
-        # Extract unique locations and remove empty entries
         unique_locations = sorted(set(filter(None, location_short)))
 
         return {"locations": unique_locations}
@@ -252,15 +189,12 @@ def get_venues():
         dict: A list of unique locations.
     """
     try:
-        # Load the index
         index = pt.IndexFactory.of(INDEX_DIR)
         meta_index = index.getMetaIndex()
         doc_ids = range(index.getCollectionStatistics().getNumberOfDocuments())
 
-        # Retrieve the LocationShort field from metadata
         location_short = [meta_index.getItem("Venue", doc_id) for doc_id in doc_ids]
 
-        # Extract unique locations and remove empty entries
         unique_locations = sorted(set(filter(None, location_short)))
 
         return {"venue": unique_locations}
@@ -281,15 +215,12 @@ def get_event_by_docno(docno: str):
         dict: The event data corresponding to the given docno.
     """
     try:
-        # Load the indexed data
         index = pt.IndexFactory.of(INDEX_DIR)
         meta_index = index.getMetaIndex()
         doc_ids = range(index.getCollectionStatistics().getNumberOfDocuments())
 
-        # Retrieve metadata for all documents
         docnos = [meta_index.getItem("docno", doc_id) for doc_id in doc_ids]
 
-        # Check if the provided docno exists
         if docno not in docnos:
             raise HTTPException(status_code=404, detail=f"Document with docno '{docno}' not found.")
 

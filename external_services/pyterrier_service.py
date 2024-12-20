@@ -26,7 +26,7 @@ def preprocess_and_cluster(data: pd.DataFrame, num_clusters: int = 5, text_col: 
         text_col (str): The column containing text data for clustering.
 
     Returns:
-        pd.DataFrame: The dataset with an additional 'cluster' column.
+        pd.DataFrame: The dataset with populated 'cluster' column.
     """
     if text_col not in data.columns:
         raise ValueError(f"Column '{text_col}' not found in the dataset.")
@@ -55,14 +55,12 @@ def index_documents(data: pd.DataFrame):
     if not os.path.exists(INDEX_DIR):
         os.makedirs(INDEX_DIR, exist_ok=True)
 
-        # Convert 'cluster' to string, as PyTerrier expects metadata as strings
         data["cluster"] = data["cluster"].astype(str)
 
         # Vectorize the --------- LocationShort Cluster ------------ using TF-IDF
         vectorizer = TfidfVectorizer(stop_words="english", max_features=1000)
         tfidf_matrix = vectorizer.fit_transform(data["LocationShort"])
 
-        # Apply K-Means clustering
         kmeans = KMeans(n_clusters=15, random_state=42)
         data["LocationShort Cluster"] = kmeans.fit_predict(tfidf_matrix)
         data["LocationShort Cluster"] = data["LocationShort Cluster"].astype(str)
@@ -72,7 +70,6 @@ def index_documents(data: pd.DataFrame):
         vectorizer = TfidfVectorizer(stop_words="english", max_features=1000)
         tfidf_matrix = vectorizer.fit_transform(data["Price"])
 
-        # Apply K-Means clustering
         kmeans = KMeans(n_clusters=6, random_state=42)
         data["Price Cluster"] = kmeans.fit_predict(tfidf_matrix)
         data["Price Cluster"] = data["Price Cluster"].astype(str)
@@ -105,7 +102,6 @@ def search_documents(query: str = "", filters=None, cluster_id=None) -> pd.DataF
         pt.init()
 
     def fetch_metadata(index_dir: str) -> pd.DataFrame:
-        """Fetch metadata (docno and cluster) from the index."""
         index = pt.IndexFactory.of(index_dir)
         meta_index = index.getMetaIndex()
         doc_ids = range(index.getCollectionStatistics().getNumberOfDocuments())
@@ -190,7 +186,6 @@ def retrieve_data_by_cluster(cluster_id: int, cluster_type: str, index_dir: str)
     meta_index = index.getMetaIndex()
     doc_ids = range(index.getCollectionStatistics().getNumberOfDocuments())
 
-    # Retrieve metadata fields
     docnos = [meta_index.getItem("docno", doc_id) for doc_id in doc_ids]
     clusters = [meta_index.getItem(cluster_type, doc_id) for doc_id in doc_ids]
     eventName = [meta_index.getItem("Event Name", doc_id) for doc_id in doc_ids]
@@ -202,15 +197,12 @@ def retrieve_data_by_cluster(cluster_id: int, cluster_type: str, index_dir: str)
     imageLink = [meta_index.getItem("Image Link", doc_id) for doc_id in doc_ids]
     link = [meta_index.getItem("Link", doc_id) for doc_id in doc_ids]
 
-    # Construct a DataFrame
     data = pd.DataFrame({"docno": docnos, cluster_type: clusters, "Event Name": eventName, "Date": date, "Venue": venue, "Location": location, "Price": price, "Description": description, "Image Link": imageLink, "Link": link})
 
-    # Ensure the cluster_type column exists
     if cluster_type not in data.columns:
         raise ValueError(f"Cluster information ('{cluster_type}' column) is missing in the index.")
 
-    # Filter by the specified cluster ID
-    cluster_data = data[data[cluster_type] == str(cluster_id)]  # Ensure cluster_id matches as a string
+    cluster_data = data[data[cluster_type] == str(cluster_id)]
 
     return cluster_data
 
@@ -229,7 +221,6 @@ def get_cluster_keywords(data: pd.DataFrame, text_col: str = "text", num_cluster
     Returns:
         dict: A dictionary mapping cluster IDs to lists of keywords.
     """
-    # Preprocess and cluster data
     data = preprocess_and_cluster(data, num_clusters=num_clusters, text_col=text_col)
 
     # Vectorize the text using TF-IDF
@@ -239,7 +230,7 @@ def get_cluster_keywords(data: pd.DataFrame, text_col: str = "text", num_cluster
 
     # Determine the most frequent words across all clusters
     global_word_counts = tfidf_matrix.sum(axis=0).A1
-    most_frequent_words = set(feature_names[i] for i in global_word_counts.argsort()[-10:])  # Top 10 frequent words
+    most_frequent_words = set(feature_names[i] for i in global_word_counts.argsort()[-10:])
 
     # Extract keywords for each cluster
     cluster_keywords = {}
@@ -248,7 +239,7 @@ def get_cluster_keywords(data: pd.DataFrame, text_col: str = "text", num_cluster
         word_counts = cluster_data.sum(axis=0).A1
 
         # Apply Zipf's law: normalize by rank
-        word_indices = word_counts.argsort()[::-1]  # Sort indices by descending frequency
+        word_indices = word_counts.argsort()[::-1]
         ranked_words = [(feature_names[i], word_counts[i] / (rank + 1)) for rank, i in enumerate(word_indices)]
         ranked_words = sorted(ranked_words, key=lambda x: x[1], reverse=True)
 
@@ -264,7 +255,8 @@ def get_cluster_keywords(data: pd.DataFrame, text_col: str = "text", num_cluster
 
 def save_clusters_to_csv(data: pd.DataFrame, output_file: str = "clustered_results.csv"):
     """
-    Save clustered data to a CSV file.
+    Save processed data to a CSV file.
+    Used for test purposes
 
     Args:
         data (pd.DataFrame): Data with cluster labels.
